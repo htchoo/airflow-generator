@@ -1,0 +1,80 @@
+# -*- coding: utf-8 -*-
+from datetime import datetime, timedelta
+import pendulum
+from airflow import DAG
+from airflow.models.param import Param
+from airflow.operators.empty import EmptyOperator
+from airflow.providers.google.cloud.operators.bigquery import BigQueryInsertJobOperator
+from common import config, logging_utils
+from common.utils import common_utils
+
+__author__ = "{{ author }}"
+__email__ = "{{ email }}"
+
+"""
+[파일명] : {{ dag_id }}
+[작성일] : {{ today_date }}
+
+[로직요약]
+{{ etl_summary }}
+"""
+
+default_args = {
+    'owner': '{{ author }}',
+    'retries': {{ retries }},
+    'retry_delay': timedelta(minutes={{ retry_delay }}),
+    'wait_for_downstream': {{ wait_downstream_val }},
+    'on_failure_callback': logging_utils.handle_task_fail,
+}
+
+# UI에서 입력된 반복 변수 리스트
+LOOP_ITEMS = {{ loop_variables | safe }}
+
+with DAG(
+    dag_id='{{ dag_id }}',
+    description='{{ description }}',
+    start_date=pendulum.datetime({{ start_date_val }}, tz="Asia/Seoul"),
+    schedule_interval={{ schedule_val }},
+    catchup={{ catchup_val }},
+    tags={{ tags_list }},
+    render_template_as_native_obj={{ render_template_val }},
+    {% if enable_max_active_runs %}
+    max_active_runs={{ max_active_runs }},
+    {% endif %}
+    default_args=default_args,
+    {% if dag_params %}
+    params={
+        {% for key, val in dag_params.items() %}
+        "{{ key }}": Param("{{ val.default }}", description="{{ val.description }}"),
+        {% endfor %}
+    },
+    {% endif %}
+) as dag:
+
+    # 시작과 끝을 잡아주는 더미 태스크
+    start_task = EmptyOperator(task_id='start')
+    end_task = EmptyOperator(task_id='end')
+
+    # 반복 변수 리스트를 순회하며 태스크 생성
+    for item in LOOP_ITEMS:
+        
+        # 파이썬 f-string을 활용해 쿼리 내의 {item}을 동적으로 치환
+        sql_query = f"""
+        {{ execute_query }}
+        """
+        
+        # 테이블 명에도 item이 포함되어 있을 경우 치환
+        target_table_name = f"{{ target_table }}"
+        
+        etl_task = BigQueryInsertJobOperator(
+            task_id=f'load_{item}_task',
+            gcp_conn_id='{{ target_conn }}',
+            configuration={
+                "query": {
+                    "query": f"TRUNCATE TABLE `{target_table_name}`; \nINSERT INTO `{target_table_name}` \n{sql_query}",
+                    "useLegacySql": False,
+                }
+            }
+        )
+        
+        start_task >> etl_task >> end_task

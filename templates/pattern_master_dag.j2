@@ -1,0 +1,114 @@
+# -*- coding: utf-8 -*-
+import os
+from airflow import DAG
+from airflow.operators.empty import EmptyOperator
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
+from airflow.utils.trigger_rule import TriggerRule
+from datetime import datetime, timedelta
+import pendulum
+from common import config
+from common.utils import common_utils
+{% if fail_alert or success_alert %}from common import logging_utils{% endif %}
+
+__author__ = "{{ author }}"
+__copyright__ = "Copyright {{ today_date[:4] }}, LG전자 해영본 OneData구축"
+__credits__ = ["{{ author }}"]
+__version__ = "1.0"
+__maintainer__ = "{{ author }}"
+__email__ = "{{ email }}"
+__status__ = "Development"
+
+"""
+[파일명] : {{ dag_id }}
+[작성일] : {{ today_date }}
+
+[로직요약]
+{{ etl_summary }}
+"""
+
+dag_id = os.path.basename(__file__).replace(".pyc", "").replace(".py", "")
+description = "{{ description }}"
+
+"""
+(@) 배치 흐름 설정
+dag_list_01 -> join -> dag_list_02 -> join 순으로 흐름
+dag_list_nn 에는 병렬로 실행할 dag_id(pgm_id)를 콤마(,) 구분자로 작성
+dag_list_all 에는 dag_list_nn을 순서대로 콤마(,) 구분자로 작성
+"""
+dag_list_1 = [
+    {%- for sub in sub_dag_list %}
+    "{{ sub.strip() }}",
+    {%- endfor %}
+]
+
+# 💡 향후 순차적으로 실행할 Sub-DAG 그룹이 추가될 경우 아래 주석을 해제하고 사용하세요.
+# dag_list_2 = [
+#     "ONED_EL2_SAMPLE_DAG_ID_01",
+#     "ONED_EL2_SAMPLE_DAG_ID_02",
+# ]
+
+dag_list_all = [
+    dag_list_1,
+    # dag_list_2,
+]
+
+args = {
+    "owner": config.oned_env.get("dag_owner", "{{ author }}"),
+    "retries": config.oned_env.get("retries", {{ retries }}),
+    "retry_delay": config.oned_env.get("retry_delay", timedelta(minutes={{ retry_delay }})),
+    "provide_context": True,
+    {% if fail_alert %}
+    "on_failure_callback": logging_utils.handle_task_fail,
+    {% endif %}
+}
+
+{% if auto_tags %}
+tags = common_utils.parse_tags(dag_id)
+{% else %}
+tags = {{ tags_list }}
+{% endif %}
+
+def get_empty_op(trigger_rule, idx):
+    return EmptyOperator(
+        task_id=f"join_{trigger_rule}_task_{idx}",
+        trigger_rule=trigger_rule,
+    )
+
+with DAG(
+    dag_id=dag_id,
+    description=description,
+    start_date=config.oned_env.get("start_date", pendulum.datetime({{ start_date_val }}, tz="Asia/Seoul")),
+    schedule_interval={{ schedule_val }},
+    {% if success_alert %}
+    on_success_callback=logging_utils.handle_dag_success,
+    {% endif %}
+    default_args=args,
+    tags=tags,
+    catchup={{ catchup_val }},
+    {% if enable_max_active_runs %}
+    max_active_runs={{ max_active_runs }},
+    {% endif %}
+    render_template_as_native_obj={{ render_template_val }},
+) as dag:
+
+    prev_task = None
+    for idx, dag_id_list in enumerate(dag_list_all):
+        next_task = get_empty_op(TriggerRule.ALL_SUCCESS, idx)
+        for sub_dag_id in dag_id_list:
+            if not sub_dag_id: continue
+            triggered_task = TriggerDagRunOperator(
+                task_id=f"trigger_{sub_dag_id}",
+                trigger_dag_id=sub_dag_id,
+                execution_date="{% raw %}{{ execution_date }}{% endraw %}",
+                pool=config.oned_env.get("airflow_batch_pool", "default_pool"),
+                reset_dag_run=True,
+                wait_for_completion=True,
+                poke_interval={{ poke_interval }},
+                deferrable=True,
+                # 💡 유일한 수정 포인트: tojson 제거 및 기본값 {} 처리
+                conf="{% raw %}{{ dag_run.conf or {} }}{% endraw %}",
+            )
+            if prev_task is not None:
+                prev_task >> triggered_task
+            triggered_task >> next_task
+        prev_task = next_task

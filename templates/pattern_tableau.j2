@@ -1,0 +1,128 @@
+# -*- coding: utf-8 -*-
+import os
+import json
+from datetime import datetime, timedelta
+import pendulum
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.exceptions import AirflowException
+import tableauserverclient as TSC
+
+# 💡 수정 완료: common_utils는 common.utils 폴더에서 가져오도록 명시적으로 분리
+from common import config, date_utils
+from common.utils import common_utils
+{% if fail_alert or success_alert %}from common import logging_utils{% endif %}
+
+__author__ = "{{ author }}"
+__copyright__ = "Copyright {{ today_date[:4] }}, LG전자 해영본 OneData구축"
+__credits__ = ["{{ author }}"]
+__version__ = "1.0"
+__maintainer__ = "{{ author }}"
+__email__ = "{{ email }}"
+__status__ = "Development"
+
+"""
+[파일명] : {{ dag_id }}
+[작성일] : {{ today_date }}
+
+[로직요약]
+{{ etl_summary }}
+"""
+
+# 운영 소스 규격에 맞춘 변수 선언부
+odate = date_utils.P_CED
+dag_id = os.path.basename(__file__).replace(".pyc", "").replace(".py", "")
+description = "{{ description }}"
+
+# 태블로 대상 데이터 원본명
+TARGET_DATASOURCE_NAME = "{{ target_datasource }}"
+
+def get_tableau_secrets():
+    secret_path = "/opt/airflow/secrets/ssl/tableau_token.json"
+    with open(secret_path, "r") as f:
+        return json.load(f)
+
+def tableau_trigger_logic(**kwargs):
+    # Airflow 스케줄러 부하 방지를 위해 함수 내부에서 Secret을 로드합니다.
+    secrets = get_tableau_secrets()
+    TABLEAU_TOKEN_NAME = secrets.get("token_name")
+    TABLEAU_TOKEN_VALUE = secrets.get("token_value")
+    TABLEAU_SERVER_URL = secrets.get("server_url")
+    TABLEAU_SITE_ID = secrets.get("site_id", "")
+    TABLEAU_CERT_PATH = "/opt/airflow/secrets/ssl/tableau_prd-lge-combined.crt"
+
+    tableau_auth = TSC.PersonalAccessTokenAuth(
+        TABLEAU_TOKEN_NAME, TABLEAU_TOKEN_VALUE, TABLEAU_SITE_ID
+    )
+    server = TSC.Server(TABLEAU_SERVER_URL, use_server_version=True)
+    
+    server.add_http_options({'verify': TABLEAU_CERT_PATH}) 
+    server.version = '3.21'
+
+    try:
+        with server.auth.sign_in(tableau_auth):
+            print(f"--- 태블로 서버 접속 성공 (API: {server.version}) ---")
+            print(f"🔍 '{TARGET_DATASOURCE_NAME}' 원본 검색 중 (전체 페이지 탐색)...")
+            
+            target_luid = None
+            
+            # 💡 수정 완료: TSC.Pager를 사용하여 서버 내 모든 데이터 원본을 순회합니다.
+            for ds in TSC.Pager(server.datasources):
+                if ds.name == TARGET_DATASOURCE_NAME:
+                    target_luid = ds.id
+                    break
+            
+            if not target_luid:
+                raise AirflowException(f"데이터 원본 '{TARGET_DATASOURCE_NAME}'을 서버에서 찾을 수 없습니다.")
+
+            print(f"🎯 매칭된 LUID: {target_luid}")
+
+            job = server.datasources.refresh(target_luid)
+            
+            print(f"Successfully Triggered. Job ID: {job.id}")
+            print("Airflow task will finish now, leaving the job running on Tableau Server.")
+
+    except Exception as e:
+        print(f"Failed to trigger Tableau refresh: {str(e)}")
+        raise AirflowException(f"Tableau Trigger Failed: {str(e)}")
+
+
+args = {
+    "owner": config.oned_env.get("dag_owner", "{{ author }}"),
+    "retries": config.oned_env.get("retries", {{ retries }}),
+    "retry_delay": timedelta(minutes={{ retry_delay }}),
+    "provide_context": True,
+    {% if fail_alert %}
+    "on_failure_callback": logging_utils.handle_task_fail,
+    {% endif %}
+    "odate": odate,
+}
+
+{% if auto_tags %}
+tags = common_utils.parse_tags(dag_id)
+{% else %}
+tags = {{ tags_list }}
+{% endif %}
+
+with DAG(
+    dag_id=dag_id,
+    description=description,
+    start_date=config.oned_env.get("start_date", pendulum.datetime({{ start_date_val }}, tz="Asia/Seoul")),
+    schedule_interval={{ schedule_val }},
+    {% if success_alert %}
+    on_success_callback=logging_utils.handle_dag_success,
+    {% endif %}
+    default_args=args,
+    catchup={{ catchup_val }},
+    tags=tags,
+    {% if enable_max_active_runs %}
+    max_active_runs={{ max_active_runs }},
+    {% endif %}
+    render_template_as_native_obj={{ render_template_val }},
+) as dag:
+
+    tableau_trigger_task = PythonOperator(
+        task_id="001_tableau_trigger_task",
+        python_callable=tableau_trigger_logic,
+        # pool="tableau_extract_pool" 
+    )

@@ -1,0 +1,94 @@
+# -*- coding: utf-8 -*-
+import os
+from datetime import datetime, timedelta  # 💡 필수 보완: timedelta 누락 에러 해결
+import pendulum
+from airflow import DAG
+from airflow.models.param import Param
+from common import config, date_utils, logging_utils
+from common.operators.bq_call_proc_operator import BQCallProcOperator
+from common.utils import common_utils
+
+__author__ = "{{ author }}"
+__copyright__ = "Copyright {{ today_date[:4] }}, LG전자 해영본 OneData구축"
+__credits__ = ["{{ author }}"]
+__version__ = "1.0"
+__maintainer__ = "{{ author }}"
+__email__ = "{{ email }}"
+__status__ = "Development"
+
+"""
+[파일명] : {{ dag_id }}
+[작성일] : {{ today_date }}
+
+[로직요약]
+{{ etl_summary }}
+"""
+
+# 운영 소스 규격에 맞춘 변수 선언부
+odate = date_utils.P_CED
+dag_id = os.path.basename(__file__).replace(".pyc", "").replace(".py", "")
+description = "{{ description }}"
+gcp_conn_cd = "{{ target_conn }}"
+proc_id = "{{ proc_name }}"
+
+# 프로시저 파라미터 (Jinja 매크로 자동 연동 및 타입 불일치 방지)
+proc_params = [
+    dag_id,
+    {%- if dag_params %}
+    {%- for key, param in dag_params.items() %}
+    {%- if param.type == 'dynamic' %}
+    "'{% raw %}{{{% endraw %} dag_run.conf.get('{{ key }}', (dag.timezone.convert(logical_date).subtract(days={{ param.offset }})).strftime('{{ param.format }}')) {% raw %}}}{% endraw %}'"{% if not loop.last %},{% endif %}
+    {%- else %}
+    "'{% raw %}{{{% endraw %} params.get('{{ key }}', '{{ param.default }}') {% raw %}}}{% endraw %}'"{% if not loop.last %},{% endif %}
+    {%- endif %}
+    {%- endfor %}
+    {%- endif %}
+]
+
+args = {
+    "owner": config.oned_env.get("dag_owner", "{{ author }}"),
+    "retries": config.oned_env.get("retries", {{ retries }}),
+    "retry_delay": timedelta(minutes={{ retry_delay }}),
+    "provide_context": True,
+    {% if fail_alert %}
+    "on_failure_callback": logging_utils.handle_task_fail,
+    {% endif %}
+    "odate": odate,
+}
+
+{% if auto_tags %}
+tags = common_utils.parse_tags(dag_id)
+{% else %}
+tags = {{ tags_list }}
+{% endif %}
+
+with DAG(
+    dag_id=dag_id,
+    description=description,
+    start_date=config.oned_env.get("start_date", pendulum.datetime({{ start_date_val }}, tz="Asia/Seoul")),
+    schedule_interval={{ schedule_val }},
+    {% if success_alert %}
+    on_success_callback=logging_utils.handle_dag_success,
+    {% endif %}
+    default_args=args,
+    catchup={{ catchup_val }},
+    tags=tags,
+    {% if enable_max_active_runs %}
+    max_active_runs={{ max_active_runs }},
+    {% endif %}
+    render_template_as_native_obj={{ render_template_val }},
+    {% if dag_params %}
+    params={
+        {% for key, val in dag_params.items() %}
+        "{{ key }}": Param("{{ val.default if val.type == 'static' else '' }}", description="{{ val.description }}{% if val.type == 'dynamic' %} (기본: D-{{ val.offset }}){% endif %}"),
+        {% endfor %}
+    },
+    {% endif %}
+) as dag:
+
+    bq_call_proc_task = BQCallProcOperator(
+        task_id="001_bq_call_proc_task",
+        proc_id=proc_id,
+        proc_params=proc_params,
+        gcp_conn_cd=gcp_conn_cd,
+    )

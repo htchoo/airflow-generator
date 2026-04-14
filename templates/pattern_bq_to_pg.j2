@@ -1,0 +1,120 @@
+# -*- coding: utf-8 -*-
+import os
+import pandas as pd
+import io
+import csv
+from datetime import datetime, timedelta
+import pendulum
+from airflow import DAG
+from airflow.models.param import Param
+from airflow.operators.python import PythonOperator
+from airflow.providers.google.cloud.hooks.bigquery import BigQueryHook
+from airflow.providers.postgres.hooks.postgres import PostgresHook
+
+from common import config, date_utils, logging_utils
+from common.utils import common_utils
+
+__author__ = "{{ author }}"
+__email__ = "{{ email }}"
+
+"""
+[파일명] : {{ dag_id }}
+[작성일] : {{ today_date }}
+
+[로직요약]
+{{ etl_summary }}
+"""
+
+default_args = {
+    'owner': '{{ author }}',
+    'retries': {{ retries }},
+    'retry_delay': timedelta(minutes={{ retry_delay }}),
+    'wait_for_downstream': {{ wait_downstream_val }},
+    'on_failure_callback': logging_utils.handle_task_fail,
+}
+
+def run_etl_logic(**context):
+    bq_hook = BigQueryHook(gcp_conn_id='{{ source_conn }}')
+    pg_hook = PostgresHook(postgres_conn_id='{{ target_conn }}')
+    
+    query = context['templates_dict']['query']
+    params = context.get('params', {})
+    
+    st_date = params.get('i_start_date')
+    ed_date = params.get('i_end_date')
+    single_date = params.get('{{ single_date_key }}')
+    
+    if st_date and ed_date:
+        del_sql = f"DELETE FROM {{ target_table }} WHERE {{ partition_column }} BETWEEN '{st_date}' AND '{ed_date}';"
+    elif st_date:
+        del_sql = f"DELETE FROM {{ target_table }} WHERE {{ partition_column }} >= '{st_date}';"
+    elif ed_date:
+        del_sql = f"DELETE FROM {{ target_table }} WHERE {{ partition_column }} <= '{ed_date}';"
+    elif single_date:
+        del_sql = f"DELETE FROM {{ target_table }} WHERE {{ partition_column }} >= '{single_date}';"
+    else:
+        del_sql = f"TRUNCATE TABLE {{ target_table }};"
+    
+    {% if is_large_data %}
+    t_table_nm = '{{ target_table }}'.split('.')[-1]
+    stg_table = f"stage_ia.{t_table_nm}_stg"
+    
+    with pg_hook.get_conn() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(f"DROP TABLE IF EXISTS {stg_table};")
+            cursor.execute(f"CREATE UNLOGGED TABLE {stg_table} (LIKE {{ target_table }} INCLUDING ALL);")
+            
+            client = bq_hook.get_client()
+            results = client.query(query).result(page_size={{ chunk_size }})
+            
+            total = 0
+            for df_chunk in results.to_dataframe_iterable():
+                df_chunk = df_chunk.replace({pd.NaT: None})
+                buffer = io.StringIO()
+                df_chunk.to_csv(buffer, index=False, header=False, sep='\t', na_rep='')
+                buffer.seek(0)
+                cursor.copy_expert(f"COPY {stg_table} FROM STDIN WITH (FORMAT CSV, DELIMITER '\t', NULL '')", buffer)
+                total += len(df_chunk)
+            
+            cursor.execute(del_sql)
+            cursor.execute(f"INSERT INTO {{ target_table }} SELECT * FROM {stg_table};")
+            cursor.execute(f"DROP TABLE {stg_table};")
+        conn.commit()
+    {% else %}
+    df = bq_hook.get_pandas_df(sql=query)
+    engine = pg_hook.get_sqlalchemy_engine()
+    schema, table = '{{ target_table }}'.split('.')
+    
+    with pg_hook.get_conn() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(del_sql)
+        conn.commit()
+        
+    df.to_sql(table, engine, schema=schema, if_exists='append', index=False)
+    {% endif %}
+
+with DAG(
+    dag_id='{{ dag_id }}',
+    description='{{ description }}',
+    start_date=pendulum.datetime({{ start_date_val }}, tz="Asia/Seoul"),
+    schedule_interval={{ schedule_val }},
+    catchup={{ catchup_val }},
+    tags={{ tags_list }},
+    render_template_as_native_obj={{ render_template_val }},
+    {% if enable_max_active_runs %}
+    max_active_runs={{ max_active_runs }},
+    {% endif %}
+    default_args=default_args,
+    {% if dag_params %}
+    params={
+        {% for key, val in dag_params.items() %}
+        "{{ key }}": Param("{{ val.default }}", description="{{ val.description }}"),
+        {% endfor %}
+    },
+    {% endif %}
+) as dag:
+    PythonOperator(
+        task_id='etl_task', 
+        python_callable=run_etl_logic,
+        templates_dict={'query': """{{ execute_query }}"""}
+    )

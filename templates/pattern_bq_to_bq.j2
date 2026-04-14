@@ -1,0 +1,91 @@
+# -*- coding: utf-8 -*-
+from datetime import datetime, timedelta
+import pendulum
+from airflow import DAG
+from airflow.models.param import Param
+from airflow.providers.google.cloud.operators.bigquery import BigQueryInsertJobOperator
+from common import config, logging_utils
+from common.utils import common_utils
+
+__author__ = "{{ author }}"
+__email__ = "{{ email }}"
+
+"""
+[파일명] : {{ dag_id }}
+[작성일] : {{ today_date }}
+
+[로직요약]
+{{ etl_summary }}
+"""
+
+default_args = {
+    'owner': '{{ author }}',
+    'retries': {{ retries }},
+    'retry_delay': timedelta(minutes={{ retry_delay }}),
+    'wait_for_downstream': {{ wait_downstream_val }},
+    {% if fail_alert %}
+    'on_failure_callback': logging_utils.handle_task_fail,
+    {% endif %}
+}
+
+{% if auto_tags %}
+tags = common_utils.parse_tags("{{ dag_id }}")
+{% else %}
+tags = {{ tags_list }}
+{% endif %}
+
+execute_sql = """
+    {% raw %}{% set st_date = dag_run.conf.get('i_start_date', params.get('i_start_date')) %}{% endraw %}
+    {% raw %}{% set ed_date = dag_run.conf.get('i_end_date', params.get('i_end_date')) %}{% endraw %}
+    {% raw %}{% set single_date = dag_run.conf.get('{% endraw %}{{ single_date_key }}{% raw %}', params.get('{% endraw %}{{ single_date_key }}{% raw %}')) %}{% endraw %}
+
+    {% raw %}{% if st_date and ed_date %}{% endraw %}
+        DELETE FROM `{{ target_table }}` WHERE {{ partition_column }} BETWEEN '{% raw %}{{ st_date }}{% endraw %}' AND '{% raw %}{{ ed_date }}{% endraw %}';
+    {% raw %}{% elif st_date %}{% endraw %}
+        DELETE FROM `{{ target_table }}` WHERE {{ partition_column }} >= '{% raw %}{{ st_date }}{% endraw %}';
+    {% raw %}{% elif ed_date %}{% endraw %}
+        DELETE FROM `{{ target_table }}` WHERE {{ partition_column }} <= '{% raw %}{{ ed_date }}{% endraw %}';
+    {% raw %}{% elif single_date %}{% endraw %}
+        DELETE FROM `{{ target_table }}` WHERE {{ partition_column }} >= '{% raw %}{{ single_date }}{% endraw %}';
+    {% raw %}{% else %}{% endraw %}
+        TRUNCATE TABLE `{{ target_table }}`;
+    {% raw %}{% endif %}{% endraw %}
+
+    INSERT INTO `{{ target_table }}`
+    {{ execute_query }}
+"""
+
+with DAG(
+    dag_id='{{ dag_id }}',
+    description='{{ description }}',
+    start_date=pendulum.datetime({{ start_date_val }}, tz="Asia/Seoul"),
+    schedule_interval={{ schedule_val }},
+    catchup={{ catchup_val }},
+    tags=tags,
+    render_template_as_native_obj={{ render_template_val }},
+    {% if success_alert %}
+    on_success_callback=logging_utils.handle_dag_success,
+    {% endif %}
+    {% if enable_max_active_runs %}
+    max_active_runs={{ max_active_runs }},
+    {% endif %}
+    default_args=default_args,
+    {% if dag_params %}
+    params={
+        {% for key, val in dag_params.items() %}
+        "{{ key }}": Param("{{ val.default if val.type == 'static' else '' }}", description="{{ val.description }}{% if val.type == 'dynamic' %} (기본: D-{{ val.offset }}){% endif %}"),
+        {% endfor %}
+    },
+    {% endif %}
+) as dag:
+    
+    bq_to_bq_task = BigQueryInsertJobOperator(
+        task_id='bq_to_bq_task',
+        gcp_conn_id='{{ target_conn }}',
+        configuration={
+            "query": {
+                "query": execute_sql,
+                "useLegacySql": False,
+            }
+        }
+    )
