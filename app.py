@@ -1,14 +1,19 @@
 import streamlit as st
 import psycopg2
 from jinja2 import Environment, FileSystemLoader
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 # 레이아웃 간소화 (가장 먼저 선언)
 st.set_page_config(page_title="통합 ETL DAG 생성기", layout="wide")
 
 # ==========================================
-# 🗄️ DB 연동 및 로깅 유틸리티 (NeonDB)
+# 🗄️ 타임존 및 DB 연동 유틸리티 (NeonDB)
 # ==========================================
+def get_kst_now():
+    """현재 한국 시간(KST)을 반환하는 함수 (DB timestamp 적재용)"""
+    KST = timezone(timedelta(hours=9))
+    return datetime.now(KST).replace(tzinfo=None)
+
 def get_db_connection():
     """NeonDB 연결 객체 생성"""
     return psycopg2.connect(
@@ -37,12 +42,12 @@ def verify_user(user_id, password):
         return None
 
 def change_password(user_id, current_pw, new_pw):
-    """현재 비밀번호 확인 후 새 비밀번호로 업데이트 (로그인 전 사용)"""
+    """현재 비밀번호 확인 후 새 비밀번호로 업데이트 (KST 적용)"""
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # 1. ID와 현재 비밀번호가 맞는지 검증하며, 로깅을 위해 name도 함께 가져옵니다.
+        # 1. ID와 현재 비밀번호가 맞는지 검증
         cur.execute("SELECT name FROM public.users WHERE id = %s AND pswd = %s", (user_id, current_pw))
         user = cur.fetchone()
         
@@ -51,13 +56,13 @@ def change_password(user_id, current_pw, new_pw):
             
         user_name = user[0]
         
-        # 2. 비밀번호 및 업데이트 일시 갱신
+        # 2. 비밀번호 및 업데이트 일시(KST) 갱신
         update_query = """
             UPDATE public.users 
             SET pswd = %s, update_dttm = %s 
             WHERE id = %s
         """
-        cur.execute(update_query, (new_pw, datetime.now(), user_id))
+        cur.execute(update_query, (new_pw, get_kst_now(), user_id))
         conn.commit()
         
         cur.close()
@@ -67,7 +72,7 @@ def change_password(user_id, current_pw, new_pw):
         return False, f"비밀번호 변경 중 DB 오류 발생: {e}", None
 
 def insert_log(user_id, user_name, event_name, script=None):
-    """airflow_generator_log 테이블에 사용자 활동 및 생성된 스크립트 로깅"""
+    """airflow_generator_log 테이블에 사용자 활동 로깅 (KST 적용)"""
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -75,7 +80,7 @@ def insert_log(user_id, user_name, event_name, script=None):
             INSERT INTO public.airflow_generator_log (id, name, event_name, event_dttm, script)
             VALUES (%s, %s, %s, %s, %s)
         """
-        cur.execute(query, (user_id, user_name, event_name, datetime.now(), script))
+        cur.execute(query, (user_id, user_name, event_name, get_kst_now(), script))
         conn.commit()
         cur.close()
         conn.close()
@@ -453,7 +458,7 @@ if submitted:
             template = env.get_template(template_file)
             
             rendered_code = template.render(
-                project_name=project_name, author=author, email=email, today_date=datetime.now().strftime("%Y-%m-%d"),
+                project_name=project_name, author=author, email=email, today_date=get_kst_now().strftime("%Y-%m-%d"),
                 dag_id=dag_id, description=description,
                 is_large_data=is_large_data, chunk_size=chunk_size,
                 source_conn=source_conn, target_conn=target_conn,
