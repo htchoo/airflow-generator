@@ -47,7 +47,6 @@ def change_password(user_id, current_pw, new_pw):
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # 1. ID와 현재 비밀번호가 맞는지 검증
         cur.execute("SELECT name FROM public.users WHERE id = %s AND pswd = %s", (user_id, current_pw))
         user = cur.fetchone()
         
@@ -56,7 +55,6 @@ def change_password(user_id, current_pw, new_pw):
             
         user_name = user[0]
         
-        # 2. 비밀번호 및 업데이트 일시(KST) 갱신
         update_query = """
             UPDATE public.users 
             SET pswd = %s, update_dttm = %s 
@@ -94,78 +92,70 @@ def auth_screen():
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
     
-    # 화면 전환을 위한 상태값 (login 또는 change_pw)
     if "auth_view_mode" not in st.session_state:
         st.session_state["auth_view_mode"] = "login"
 
     if not st.session_state["authenticated"]:
         
-        # --- [모드 1] 로그인 화면 ---
-        if st.session_state["auth_view_mode"] == "login":
-            st.markdown("## 🔒 LG ONED 플랫폼 로그인")
-            st.markdown("통합 ETL DAG 생성기에 접근하려면 DB 계정으로 로그인해 주세요.")
-            
-            with st.form("login_form"):
-                user_id = st.text_input("사용자 ID")
-                password = st.text_input("비밀번호", type="password")
-                login_btn = st.form_submit_button("로그인", type="primary")
+        _, col_login, _ = st.columns([1, 1, 1])
+        
+        with col_login:
+            if st.session_state["auth_view_mode"] == "login":
+                st.markdown("### 🔒 LG ONED 플랫폼 로그인")
+                with st.form("login_form"):
+                    user_id = st.text_input("사용자 ID")
+                    password = st.text_input("비밀번호", type="password")
+                    login_btn = st.form_submit_button("로그인", type="primary", use_container_width=True)
 
-                if login_btn:
-                    user_name = verify_user(user_id, password)
-                    if user_name:
-                        st.session_state["authenticated"] = True
-                        st.session_state["user_id"] = user_id
-                        st.session_state["user_name"] = user_name
-                        insert_log(user_id, user_name, "LOGIN_SUCCESS")
-                        st.rerun()
-                    else:
-                        st.error("😕 ID 또는 비밀번호가 올바르지 않습니다.")
-            
-            st.write("")
-            if st.button("비밀번호를 변경하시겠습니까?"):
-                st.session_state["auth_view_mode"] = "change_pw"
-                st.rerun()
-
-        # --- [모드 2] 비밀번호 변경 화면 ---
-        elif st.session_state["auth_view_mode"] == "change_pw":
-            st.markdown("## 🔑 비밀번호 변경")
-            st.markdown("현재 사용 중인 ID와 비밀번호를 인증한 후 새 비밀번호로 변경할 수 있습니다.")
-            
-            with st.form("pwd_change_form", clear_on_submit=True):
-                c_user_id = st.text_input("사용자 ID")
-                curr_pw = st.text_input("현재 비밀번호", type="password")
-                st.markdown("---")
-                new_pw = st.text_input("새 비밀번호 (4자리 이상)", type="password")
-                new_pw_check = st.text_input("새 비밀번호 확인", type="password")
-                    
-                btn_change_pwd = st.form_submit_button("비밀번호 변경하기", type="primary")
-                
-                if btn_change_pwd:
-                    if not c_user_id or not curr_pw or not new_pw or not new_pw_check:
-                        st.warning("모든 필드를 입력해 주세요.")
-                    elif new_pw != new_pw_check:
-                        st.error("새 비밀번호가 일치하지 않습니다.")
-                    elif len(new_pw) < 4:
-                        st.warning("새 비밀번호는 4자리 이상으로 설정해 주세요.")
-                    elif curr_pw == new_pw:
-                        st.warning("새 비밀번호는 현재 비밀번호와 다르게 설정해 주세요.")
-                    else:
-                        success, msg, user_name = change_password(c_user_id, curr_pw, new_pw)
-                        if success:
-                            st.success(msg)
-                            insert_log(c_user_id, user_name, "PASSWORD_CHANGE")
+                    if login_btn:
+                        user_name = verify_user(user_id, password)
+                        if user_name:
+                            st.session_state["authenticated"] = True
+                            st.session_state["user_id"] = user_id
+                            st.session_state["user_name"] = user_name
+                            insert_log(user_id, user_name, "LOGIN_SUCCESS")
+                            st.rerun()
                         else:
-                            st.error(msg)
-
-            st.write("")
-            if st.button("⬅️ 로그인 화면으로 돌아가기"):
-                st.session_state["auth_view_mode"] = "login"
-                st.rerun()
+                            st.error("😕 ID 또는 비밀번호가 올바르지 않습니다.")
                 
+                if st.button("비밀번호 변경하기", use_container_width=True):
+                    st.session_state["auth_view_mode"] = "change_pw"
+                    st.rerun()
+
+            elif st.session_state["auth_view_mode"] == "change_pw":
+                st.markdown("### 🔑 비밀번호 변경")
+                with st.form("pwd_change_form", clear_on_submit=True):
+                    c_user_id = st.text_input("사용자 ID")
+                    curr_pw = st.text_input("현재 비밀번호", type="password")
+                    st.markdown("---")
+                    new_pw = st.text_input("새 비밀번호 (4자리 이상)", type="password")
+                    new_pw_check = st.text_input("새 비밀번호 확인", type="password")
+                        
+                    btn_change_pwd = st.form_submit_button("변경 완료", type="primary", use_container_width=True)
+                    
+                    if btn_change_pwd:
+                        if not c_user_id or not curr_pw or not new_pw or not new_pw_check:
+                            st.warning("모든 필드를 입력해 주세요.")
+                        elif new_pw != new_pw_check:
+                            st.error("새 비밀번호가 일치하지 않습니다.")
+                        elif len(new_pw) < 4:
+                            st.warning("새 비밀번호는 4자리 이상으로 설정해 주세요.")
+                        elif curr_pw == new_pw:
+                            st.warning("새 비밀번호는 현재 비밀번호와 다르게 설정해 주세요.")
+                        else:
+                            success, msg, user_name = change_password(c_user_id, curr_pw, new_pw)
+                            if success:
+                                st.success(msg)
+                                insert_log(c_user_id, user_name, "PASSWORD_CHANGE")
+                            else:
+                                st.error(msg)
+
+                if st.button("⬅️ 로그인 화면으로 돌아가기", use_container_width=True):
+                    st.session_state["auth_view_mode"] = "login"
+                    st.rerun()
         return False
     return True
 
-# 인증되지 않았으면 여기서 앱 실행 중지
 if not auth_screen():
     st.stop()
 
@@ -176,7 +166,8 @@ col_title, col_logout = st.columns([8, 1])
 with col_title:
     st.markdown(f"### 🚀 OneData 통합 ETL DAG 생성 플랫폼 (접속자: {st.session_state['user_name']})")
 with col_logout:
-    if st.button("로그아웃"):
+    st.write("")
+    if st.button("로그아웃", use_container_width=True):
         insert_log(st.session_state["user_id"], st.session_state["user_name"], "LOGOUT")
         st.session_state["authenticated"] = False
         st.rerun()
@@ -186,14 +177,14 @@ st.markdown("---")
 # ==========================================
 # 1. 기본 정보 및 프로젝트/유형 선택
 # ==========================================
-st.markdown("#### 1. 프로젝트, 기본 정보 및 생성 유형")
+st.markdown("#### 1. 기본 정보 및 유형 선택")
 col0, col1, col2, col3, col4, col5 = st.columns([0.9, 1.2, 0.8, 1.2, 1.4, 1.5])
 with col0:
     project_name = st.selectbox("🏢 프로젝트", ["LG ONED"])
 with col1:
     dag_id = st.text_input("DAG ID", placeholder="ONED_MIG_01")
 with col2:
-    author = st.text_input("Owner", value=st.session_state["user_name"]) # 로그인한 유저명 자동 맵핑
+    author = st.text_input("Owner", value=st.session_state["user_name"])
 with col3:
     email = st.text_input("Email", placeholder="user@lgepartner.com")
 with col4:
@@ -211,7 +202,6 @@ with col5:
 
 st.markdown("---")
 
-# 공통 변수 초기화
 source_db, target_db, target_table, execute_query = "None", "None", "", ""
 source_conn, target_conn, partition_column = "None", "None", ""
 is_large_data, chunk_size = False, 0
@@ -266,7 +256,7 @@ elif dag_type == "반복문 적재 (Loop ETL)":
         loop_variables = st.text_input("반복 변수 목록 (쉼표로 구분)", placeholder="KR, US, EU")
     execute_query = st.text_area("추출 쿼리 (Loop 변수 적용)", height=150, placeholder="SELECT * FROM source_table WHERE country = '{{ item }}'")
 
-elif dag_type == "커스텀 라이브러리 실행 (Python)":
+elif dag_type == "커스텀 라이브러 실행 (Python)":
     d_col1, d_col2 = st.columns(2)
     with d_col1:
         lib_module = st.text_input("모듈 경로 (Import Path)", placeholder="common.utils.data_loader")
@@ -280,30 +270,123 @@ elif dag_type == "태블로원본 추출 (Tableau)":
 st.markdown("---")
 
 # ==========================================
-# 3. Airflow 스케줄 및 옵션
+# 3. Airflow 스케줄 및 환경 설정
 # ==========================================
-st.markdown("#### 3. Airflow 스케줄 및 옵션")
-p_col1, p_col2, p_col3, p_col4 = st.columns([1.2, 1.3, 1, 1])
+st.markdown("#### 3. Airflow 스케줄 및 환경 설정")
 
-with p_col1:
-    start_date = st.date_input("DAG 시작일 (Schedule Start)", value=datetime(2024, 5, 31))
-    schedule_interval = st.text_input("Schedule (Cron)", value="", placeholder="0 8 * * * (비우면 None)")
-    catchup = st.checkbox("Catchup (소급)", value=False)
+left_pane, right_pane = st.columns([1.2, 1])
+
+with left_pane:
+    # 💡 3-1. Monthly (매월) 주기가 추가되었습니다.
+    s_c1, s_c2, s_c3, s_c4 = st.columns([1.2, 1, 0.8, 0.8])
+    
+    with s_c1:
+        schedule_type = st.selectbox("🕒 주기 (KST 기준)", ["Daily (매일)", "Weekly (매주)", "Monthly (매월)", "직접 입력 (Cron)", "수동 실행 (None)"])
+
+    utc_cron = ""
+    logical_date_desc = ""
+    schedule_interval = ""
+
+    if schedule_type == "Daily (매일)":
+        with s_c2: kst_hour = st.number_input("실행 (시)", min_value=0, max_value=23, value=8, format="%d")
+        with s_c3: kst_minute = st.number_input("실행 (분)", min_value=0, max_value=59, value=0, step=10, format="%d")
         
-with p_col2:
-    auto_tags = st.checkbox("🏷️ 태그 자동 생성 (DAG ID 파싱)", value=True)
+        utc_hour = (kst_hour - 9) % 24
+        utc_cron = f"{kst_minute} {utc_hour} * * *"
+        schedule_interval = utc_cron
+        logical_date_desc = "오늘(D) 실행 ➡️ `{{ ds }}`는 **어제(D-1)**" if kst_hour >= 9 else "오늘(D) 실행 ➡️ `{{ ds }}`는 **그제(D-2)**"
+
+    elif schedule_type == "Weekly (매주)":
+        with s_c2:
+            weekdays = ["일", "월", "화", "수", "목", "금", "토"]
+            kst_weekday = st.selectbox("실행 요일", weekdays, index=1)
+        with s_c3: kst_hour = st.number_input("시간(시)", min_value=0, max_value=23, value=8, key="w_h", format="%d")
+        with s_c4: kst_minute = st.number_input("시간(분)", min_value=0, max_value=59, value=0, step=10, key="w_m", format="%d")
+        
+        cron_weekdays = {"일":0, "월":1, "화":2, "수":3, "목":4, "금":5, "토":6}
+        kst_w_idx = cron_weekdays[kst_weekday]
+        utc_hour = (kst_hour - 9) % 24
+        utc_w_idx = kst_w_idx if kst_hour >= 9 else (kst_w_idx - 1) % 7
+        
+        utc_cron = f"{kst_minute} {utc_hour} * * {utc_w_idx}"
+        schedule_interval = utc_cron
+        logical_date_desc = "오늘(D) 기준 ➡️ `{{ ds }}`는 **1주일 전(D-7)**"
+        
+    elif schedule_type == "Monthly (매월)":
+        with s_c2: kst_day = st.number_input("실행 일", min_value=1, max_value=31, value=1, format="%d")
+        with s_c3: kst_hour = st.number_input("시간(시)", min_value=0, max_value=23, value=8, key="m_h", format="%d")
+        with s_c4: kst_minute = st.number_input("시간(분)", min_value=0, max_value=59, value=0, step=10, key="m_m", format="%d")
+
+        utc_hour = (kst_hour - 9) % 24
+        # 💡 매월 1일 오전 9시 이전이면 UTC는 전월 마지막 날(L)로 자동 변환됩니다.
+        if kst_hour >= 9:
+            utc_day = kst_day
+        else:
+            utc_day = kst_day - 1 if kst_day > 1 else "L"
+            
+        utc_cron = f"{kst_minute} {utc_hour} {utc_day} * *"
+        schedule_interval = utc_cron
+        logical_date_desc = "실행일 기준 ➡️ `{{ ds }}`는 **이전 주기(1달 전)**"
+
+    elif schedule_type == "직접 입력 (Cron)":
+        with s_c2: custom_cron = st.text_input("KST 기준 Cron", placeholder="0 8 * * *")
+        if custom_cron:
+            try:
+                parts = custom_cron.split()
+                if len(parts) == 5 and parts[1].isdigit():
+                    k_h = int(parts[1])
+                    u_h = (k_h - 9) % 24
+                    utc_cron = f"{parts[0]} {u_h} {parts[2]} {parts[3]} {parts[4]}"
+                    schedule_interval = utc_cron
+                    logical_date_desc = "오늘(D) 기준 ➡️ `{{ ds }}`는 **어제(D-1)**" if k_h >= 9 else "오늘(D) 기준 ➡️ `{{ ds }}`는 **그제(D-2)**"
+                else:
+                    utc_cron = "변환 불가 (표준 형식 필요)"
+                    schedule_interval = custom_cron
+                    logical_date_desc = "입력한 Cron이 그대로 적용됩니다."
+            except:
+                utc_cron = "형식 오류"
+                schedule_interval = custom_cron
+                logical_date_desc = "-"
+        else:
+            utc_cron = "입력 대기"
+            schedule_interval = ""
+            logical_date_desc = "-"
+
+    else: # 수동 실행
+        schedule_interval = ""
+        utc_cron = "None"
+        logical_date_desc = "수기 실행 시 ➡️ `{{ ds }}`는 누른 **현재(D)** 날짜"
+
+    st.write("") 
+    d_c1, d_c2, _ = st.columns([1.2, 1, 1.6])
+    with d_c1:
+        start_date = st.date_input("🗓️ DAG 시작일 (Start Date)", value=datetime(2026, 1, 1))
+    with d_c2:
+        st.write("") 
+        catchup = st.checkbox("Catchup (소급 실행)", value=False)
+
+with right_pane:
+    st.info(f"⚙️ **[Airflow 등록 정보]** \n\n* **UTC Cron:** `{utc_cron}`  \n* **Logical Date:** {logical_date_desc}")
+
+st.write("")
+
+# 💡 3-2. 고급 옵션 및 알림 설정이 무조건 보이도록 밖으로 빼냈습니다.
+st.markdown("#### ⚙️ 고급 옵션 및 알림 설정 (선택사항)")
+p_col1, p_col2, p_col3 = st.columns(3)
+with p_col1:
+    st.markdown("**🏷️ 태그 및 종속성**")
+    auto_tags = st.checkbox("태그 자동 생성 (DAG ID 파싱)", value=True)
     tags = st.text_input("Tags (수동 입력)", value="oned_ia", disabled=auto_tags)
     render_template = st.checkbox("Render Template", value=True)
     wait_downstream = st.checkbox("Wait for Downstream", value=True)
-
-with p_col3:
+with p_col2:
+    st.markdown("**🔄 재시도 및 동시성**")
     enable_max_active_runs = st.checkbox("Max Active Runs 제한", value=True)
     max_active_runs = st.number_input("Max Runs 개수", min_value=1, value=1, disabled=not enable_max_active_runs)
-    retries = st.number_input("Retries", min_value=0, value=1)
-    retry_delay = st.number_input("Delay(분)", min_value=1, value=5)
-
-with p_col4:
-    st.markdown("**알림 (Callbacks)**")
+    retries = st.number_input("Retries (실패 시 재시도)", min_value=0, value=1)
+    retry_delay = st.number_input("Retry Delay (분 단위)", min_value=1, value=5)
+with p_col3:
+    st.markdown("**🔔 알림 (Callbacks)**")
     fail_alert = st.checkbox("🚨 실패 알림 (on_failure)", value=True)
     success_alert = st.checkbox("✅ 성공 알림 (on_success)", value=False)
 
@@ -319,13 +402,13 @@ if 'param_list' not in st.session_state:
 if 'param_counter' not in st.session_state:
     st.session_state.param_counter = 0
 
-col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 4])
+col_btn1, col_btn2, _ = st.columns([1.5, 1.5, 7])
 with col_btn1:
-    if st.button("➕ 일자 파라미터 추가", use_container_width=True):
+    if st.button("➕ 일자 파라미터 추가"):
         st.session_state.param_counter += 1
         st.session_state.param_list.append({"type": "date", "id": st.session_state.param_counter})
 with col_btn2:
-    if st.button("➕ 문자열 파라미터 추가", use_container_width=True):
+    if st.button("➕ 문자열 파라미터 추가"):
         st.session_state.param_counter += 1
         st.session_state.param_list.append({"type": "string", "id": st.session_state.param_counter})
 
@@ -401,6 +484,8 @@ for item in list(st.session_state.param_list):
                     st.rerun()
 
 st.write("")
+
+# 💡 3-3. 생성 버튼을 다시 화면 전체를 채우는 긴 버튼으로 수정했습니다.
 submitted = st.button("🚀 DAG 스크립트 생성하기", type="primary", use_container_width=True)
 
 if submitted:
@@ -416,7 +501,7 @@ if submitted:
         tags_list = [t.strip() for t in tags.split(",") if t.strip()]
         start_date_val = f"{start_date.year}, {start_date.month}, {start_date.day}"
 
-        sum_schedule = raw_schedule if raw_schedule and raw_schedule.lower() != 'none' else '수동 실행 (None)'
+        sum_schedule = f"{raw_schedule} (UTC 변환완료)" if raw_schedule and raw_schedule.lower() != 'none' else '수동 실행 (None)'
         
         if dag_type == "표준 ETL (단일 쿼리 적재)":
             logic_summary = f"  - 파이프라인  : {source_db} -> {target_db}\n  - Target Table: {target_table}"
@@ -476,7 +561,6 @@ if submitted:
                 fail_alert=fail_alert, success_alert=success_alert, auto_tags=auto_tags
             )
             
-            # ✅ [로깅] 스크립트 생성 시 DB에 로그 적재
             insert_log(
                 user_id=st.session_state["user_id"],
                 user_name=st.session_state["user_name"],
