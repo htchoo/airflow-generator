@@ -59,24 +59,31 @@ def tableau_trigger_logic(**kwargs):
     server.add_http_options({'verify': TABLEAU_CERT_PATH}) 
     server.version = '3.21'
 
-    try:
+try:
         with server.auth.sign_in(tableau_auth):
             print(f"--- 태블로 서버 접속 성공 (API: {server.version}) ---")
-            print(f"🔍 '{TARGET_DATASOURCE_NAME}' 원본 검색 중 (전체 페이지 탐색)...")
+            
+            # 💡 [핵심] 서버 측 필터 옵션 추가: 전체 원본 중 이름이 일치하는 것만 요청
+            req_options = TSC.RequestOptions()
+            req_options.filter.add(TSC.Filter("name",
+                                             "eq",
+                                             TARGET_DATASOURCE_NAME))
+
+            print(f"🔍 '{TARGET_DATASOURCE_NAME}' 원본 검색 중 (Server-side Filter)...")
             
             target_luid = None
             
-            # 💡 수정 완료: TSC.Pager를 사용하여 서버 내 모든 데이터 원본을 순회합니다.
-            for ds in TSC.Pager(server.datasources):
-                if ds.name == TARGET_DATASOURCE_NAME:
-                    target_luid = ds.id
-                    break
+            # 필터가 적용된 Pager는 일치하는 결과(1개 예상)만 포함된 1페이지만 가져옵니다.
+            for ds in TSC.Pager(server.datasources, req_options):
+                target_luid = ds.id
+                break
             
             if not target_luid:
                 raise AirflowException(f"데이터 원본 '{TARGET_DATASOURCE_NAME}'을 서버에서 찾을 수 없습니다.")
 
             print(f"🎯 매칭된 LUID: {target_luid}")
 
+            # 추출 새로고침 트리거
             job = server.datasources.refresh(target_luid)
             
             print(f"Successfully Triggered. Job ID: {job.id}")
@@ -85,7 +92,6 @@ def tableau_trigger_logic(**kwargs):
     except Exception as e:
         print(f"Failed to trigger Tableau refresh: {str(e)}")
         raise AirflowException(f"Tableau Trigger Failed: {str(e)}")
-
 
 args = {
     "owner": config.oned_env.get("dag_owner", "{{ author }}"),
