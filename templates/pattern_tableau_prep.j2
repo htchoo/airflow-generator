@@ -24,19 +24,12 @@ __status__ = "Development"
 
 """
 Tableau Flow 자동화를 실행하는 DAG 템플릿
-
-[적용 방법]
-제공된 DAG 템플릿에서
-아래 수정 대상 '(@)' 부분만 목적에 맞게 변경한다.
 """
 
-"""
-(@) 일자 정보
-예) odate = '20241010'
-"""
+# 일자 정보
 odate = date_utils.P_CED
 
-""" (@) 프로그램 정보 """
+# 프로그램 정보
 dag_id = '{{ dag_id }}'
 {% if description %}
 description = "{{ description }} | 흐름명: {{ target_flow_name }}"
@@ -44,12 +37,11 @@ description = "{{ description }} | 흐름명: {{ target_flow_name }}"
 description = "[TAB_ONED] Tableau OBS Prep 스크립트 실행 요청(Trigger): {{ target_flow_name }}"
 {% endif %}
 
-"""
-(@) 실행 환경 정보
-"""
+
+# 실행 환경 정보
 PROJECT_ROOT = "/opt/airflow/plugins/scripts"
 
-""" DAG 공통 파라미터 """
+# DAG 공통 파라미터
 args = {
     'owner': config.oned_env['dag_owner'] if hasattr(config, 'oned_env') else '{{ author }}',
     'retries': {{ retries }},
