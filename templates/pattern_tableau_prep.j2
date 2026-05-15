@@ -1,0 +1,85 @@
+# -*- coding: utf-8 -*-
+
+import os
+from datetime import datetime, timedelta
+
+from airflow import DAG
+from airflow.operators.bash import BashOperator
+
+from common import config, date_utils, logging_utils
+from common.utils import common_utils
+
+__author__ = "{{ author }}"
+__copyright__ = "Copyright {{ today_date[:4] }}, {{ project_name }}"
+__credits__ = ["{{ author }}"]
+__version__ = "1.0"
+__maintainer__ = "{{ author }}"
+__email__ = "{{ email }}"
+__status__ = "Development"
+
+"""
+[수정이력]
+{{ today_date }} - {{ author }} - 최초 작성
+"""
+
+"""
+Tableau Flow 자동화를 실행하는 DAG 템플릿
+
+[적용 방법]
+제공된 DAG 템플릿에서
+아래 수정 대상 '(@)' 부분만 목적에 맞게 변경한다.
+"""
+
+"""
+(@) 일자 정보
+예) odate = '20241010'
+"""
+odate = date_utils.P_CED
+
+""" (@) 프로그램 정보 """
+dag_id = '{{ dag_id }}'
+{% if description %}
+description = "{{ description }} | 흐름명: {{ target_flow_name }}"
+{% else %}
+description = "[TAB_ONED] Tableau OBS Prep 스크립트 실행 요청(Trigger): {{ target_flow_name }}"
+{% endif %}
+
+"""
+(@) 실행 환경 정보
+"""
+PROJECT_ROOT = "/opt/airflow/plugins/scripts"
+
+""" DAG 공통 파라미터 """
+args = {
+    'owner': config.oned_env['dag_owner'] if hasattr(config, 'oned_env') else '{{ author }}',
+    'retries': {{ retries }},
+    'retry_delay': timedelta(minutes={{ retry_delay }}),
+    'provide_context': True,
+    {% if fail_alert %}'on_failure_callback': logging_utils.handle_task_fail,{% endif %}
+}
+
+{% if auto_tags %}
+tags = common_utils.parse_tags(dag_id)
+{% else %}
+tags = {{ tags_list | safe }}
+{% endif %}
+
+with DAG(
+        dag_id=dag_id,
+        description=description,
+        start_date=datetime({{ start_date_val }}),
+        schedule_interval={{ schedule_val }},
+        {% if success_alert %}on_success_callback=logging_utils.handle_dag_success,{% endif %}
+        default_args=args,
+        catchup={{ catchup_val }},
+        tags=tags,
+) as dag:
+
+    tableau_rpa_task = BashOperator(
+        task_id='001_run_tableau_executor',
+        bash_command=f"""
+            export PYTHONPATH=$PYTHONPATH:{{ '{PROJECT_ROOT}' }}
+            cd {{ '{PROJECT_ROOT}' }}
+            python3 main.py standard {{ target_flow_id }}
+        """
+    )

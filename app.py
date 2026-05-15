@@ -196,7 +196,8 @@ with col5:
         "프로시저 호출 (Stored Procedure)", 
         "반복문 적재 (Loop ETL)", 
         "커스텀 라이브러리 실행 (Python)",
-        "태블로원본 추출 (Tableau)"
+        "태블로원본 추출 (Tableau)",
+        "태블로 흐름 실행 (Tableau Prep)" # 💡 신규 유형 추가
     ]
     dag_type = st.selectbox("🔥 DAG 구조 (유형)", dag_types)
 
@@ -209,6 +210,7 @@ sub_dag_list, poke_interval = "", 60
 loop_variables, proc_name = "", ""
 lib_module, lib_func = "", ""
 target_datasource = ""
+target_flow_name, target_flow_id = "", ""
 
 # ==========================================
 # 2. [동적 UI] DAG 유형별 상세 로직 설정
@@ -256,7 +258,7 @@ elif dag_type == "반복문 적재 (Loop ETL)":
         loop_variables = st.text_input("반복 변수 목록 (쉼표로 구분)", placeholder="KR, US, EU")
     execute_query = st.text_area("추출 쿼리 (Loop 변수 적용)", height=150, placeholder="SELECT * FROM source_table WHERE country = '{{ item }}'")
 
-elif dag_type == "커스텀 라이브러 실행 (Python)":
+elif dag_type == "커스텀 라이브러리 실행 (Python)":
     d_col1, d_col2 = st.columns(2)
     with d_col1:
         lib_module = st.text_input("모듈 경로 (Import Path)", placeholder="common.utils.data_loader")
@@ -266,6 +268,15 @@ elif dag_type == "커스텀 라이브러 실행 (Python)":
 elif dag_type == "태블로원본 추출 (Tableau)":
     st.info("💡 태블로 원본 추출은 하위 DAG로 사용되는 경우가 많습니다. 스케줄을 비워두시면 마스터 DAG에 의해서만 실행됩니다.")
     target_datasource = st.text_input("태블로 대상 원본명 (DataSource Name)", value="VSSALE_DAILY_OBS_ORD_STAT_AGGR_D")
+
+# 💡 신규: 태블로 흐름 실행 UI
+elif dag_type == "태블로 흐름 실행 (Tableau Prep)":
+    st.info("💡 태블로 Prep 흐름 실행은 BashOperator를 통해 백그라운드 스크립트(main.py)를 호출하는 방식으로 동작합니다.")
+    d_col1, d_col2 = st.columns(2)
+    with d_col1:
+        target_flow_name = st.text_input("태블로 흐름명 (Flow Name)", value="FL_V_DM_SALES_MAIN_ONED")
+    with d_col2:
+        target_flow_id = st.text_input("태블로 흐름 ID (Flow ID)", value="67")
 
 st.markdown("---")
 
@@ -277,7 +288,6 @@ st.markdown("#### 3. Airflow 스케줄 및 환경 설정")
 left_pane, right_pane = st.columns([1.2, 1])
 
 with left_pane:
-    # 💡 3-1. Monthly (매월) 주기가 추가되었습니다.
     s_c1, s_c2, s_c3, s_c4 = st.columns([1.2, 1, 0.8, 0.8])
     
     with s_c1:
@@ -318,7 +328,6 @@ with left_pane:
         with s_c4: kst_minute = st.number_input("시간(분)", min_value=0, max_value=59, value=0, step=10, key="m_m", format="%d")
 
         utc_hour = (kst_hour - 9) % 24
-        # 💡 매월 1일 오전 9시 이전이면 UTC는 전월 마지막 날(L)로 자동 변환됩니다.
         if kst_hour >= 9:
             utc_day = kst_day
         else:
@@ -352,7 +361,7 @@ with left_pane:
             schedule_interval = ""
             logical_date_desc = "-"
 
-    else: # 수동 실행
+    else: 
         schedule_interval = ""
         utc_cron = "None"
         logical_date_desc = "수기 실행 시 ➡️ `{{ ds }}`는 누른 **현재(D)** 날짜"
@@ -370,7 +379,6 @@ with right_pane:
 
 st.write("")
 
-# 💡 3-2. 고급 옵션 및 알림 설정이 무조건 보이도록 밖으로 빼냈습니다.
 st.markdown("#### ⚙️ 고급 옵션 및 알림 설정 (선택사항)")
 p_col1, p_col2, p_col3 = st.columns(3)
 with p_col1:
@@ -485,7 +493,6 @@ for item in list(st.session_state.param_list):
 
 st.write("")
 
-# 💡 3-3. 생성 버튼을 다시 화면 전체를 채우는 긴 버튼으로 수정했습니다.
 submitted = st.button("🚀 DAG 스크립트 생성하기", type="primary", use_container_width=True)
 
 if submitted:
@@ -513,6 +520,9 @@ if submitted:
             logic_summary = f"  - 실행 방식   : Loop 기반 순차 적재\n  - 대상 변수   : {loop_variables}"
         elif dag_type == "태블로원본 추출 (Tableau)":
             logic_summary = f"  - 타겟 원본명 : {target_datasource}\n  - 실행 방식   : 태블로 TSC API 호출"
+        # 💡 신규 로직 요약 추가
+        elif dag_type == "태블로 흐름 실행 (Tableau Prep)":
+            logic_summary = f"  - 타겟 흐름명 : {target_flow_name} (ID: {target_flow_id})\n  - 실행 방식   : BashOperator (RPA Script)"
         else:
             logic_summary = f"  - 커스텀 로직 실행"
 
@@ -532,16 +542,17 @@ if submitted:
         env = Environment(loader=FileSystemLoader('.'))
         
         try:
-            if dag_type == "표준 ETL (단일 쿼리 적재)":
-                template_file = 'templates/pattern_bq_to_bq.j2' if target_db == "BigQuery" else 'templates/pattern_bq_to_pg.j2'
+            if dag_type == "표준 ETL (단일 쿼리 적재)": template_file = 'templates/pattern_bq_to_bq.j2' if target_db == "BigQuery" else 'templates/pattern_bq_to_pg.j2'
             elif dag_type == "마스터 DAG (Sub-DAG 호출)": template_file = 'templates/pattern_master_dag.j2'
             elif dag_type == "프로시저 호출 (Stored Procedure)": template_file = 'templates/pattern_procedure.j2'
             elif dag_type == "반복문 적재 (Loop ETL)": template_file = 'templates/pattern_loop_etl.j2'
             elif dag_type == "커스텀 라이브러리 실행 (Python)": template_file = 'templates/pattern_custom_lib.j2'
             elif dag_type == "태블로원본 추출 (Tableau)": template_file = 'templates/pattern_tableau.j2'
+            elif dag_type == "태블로 흐름 실행 (Tableau Prep)": template_file = 'templates/pattern_tableau_prep.j2'
 
             template = env.get_template(template_file)
             
+            # 💡 렌더링 시 신규 변수 전달
             rendered_code = template.render(
                 project_name=project_name, author=author, email=email, today_date=get_kst_now().strftime("%Y-%m-%d"),
                 dag_id=dag_id, description=description,
@@ -558,6 +569,7 @@ if submitted:
                 poke_interval=poke_interval, loop_variables=[v.strip() for v in loop_variables.split(',')] if loop_variables else [],
                 proc_name=proc_name, lib_module=lib_module, lib_func=lib_func,
                 target_datasource=target_datasource, 
+                target_flow_name=target_flow_name, target_flow_id=target_flow_id,
                 fail_alert=fail_alert, success_alert=success_alert, auto_tags=auto_tags
             )
             
